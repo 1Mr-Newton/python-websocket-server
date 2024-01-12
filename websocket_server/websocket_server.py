@@ -1,3 +1,4 @@
+import re
 # Author: Johan Hanssen Seferidis
 # License: MIT
 
@@ -52,7 +53,7 @@ DEFAULT_CLOSE_REASON = bytes('', encoding='utf-8')
 
 
 class API():
-
+    
     def run_forever(self, threaded=False):
         return self._run_forever(threaded)
 
@@ -123,7 +124,8 @@ class WebsocketServer(ThreadingMixIn, TCPServer, API):
 
     allow_reuse_address = True
     daemon_threads = True  # comment to keep threads alive until finished
-
+   
+       
     def __init__(self, host='127.0.0.1', port=0, loglevel=logging.WARNING, key=None, cert=None):
         logger.setLevel(loglevel)
         TCPServer.__init__(self, (host, port), WebSocketHandler)
@@ -180,7 +182,8 @@ class WebsocketServer(ThreadingMixIn, TCPServer, API):
         client = {
             'id': self.id_counter,
             'handler': handler,
-            'address': handler.client_address
+            'address': handler.client_address,
+            'query'   : handler.query
         }
         self.clients.append(client)
         self.new_client(client, self)
@@ -427,29 +430,74 @@ class WebSocketHandler(StreamRequestHandler):
         return headers
 
     def handshake(self):
-        headers = self.read_http_headers()
+		# Variables
+        message = self.request.recv(1024).decode().strip()
+        upgrade = re.search('\nupgrade[\s]*:[\s]*websocket', message.lower())
+        key = re.search('\n[sS]ec-[wW]eb[sS]ocket-[kK]ey[\s]*:[\s]*(.*)\r\n', message)
+        # get_header = re.search('[\n]*[gG][eE][tT][\s]*[/?&=!#$a-zA-Z0-9]*', message)
+        get_header =  re.search(r'\?(.*) HTTP', message)
+        query = ""
 
-        try:
-            assert headers['upgrade'].lower() == 'websocket'
-        except AssertionError:
+        # Checks
+        if not upgrade:
             self.keep_alive = False
             return
-
-        try:
-            key = headers['sec-websocket-key']
-        except KeyError:
-            logger.warning("Client tried to connect but was missing a key")
+        if key:
+            key = key.group(1)
+        else:
+            print("Client tried to connect but was missing a key")
             self.keep_alive = False
             return
+        if get_header:
+            query_params = get_header.group(1)
+            # get_header = get_header.group()
+            # query = re.sub('[gG][eE][tT][\s]*/', '', get_header)
+            query =  re.findall(r'(\w+)=([^&]+)', query_params) 
 
+        # Setup
         response = self.make_handshake_response(key)
-        with self._send_lock:
-            self.handshake_done = self.request.send(response.encode())
+        self.query = query
+        self.handshake_done = self.request.send(response.encode())
         self.valid_client = True
         self.server._new_client_(self)
 
+    # def handshake(self):
+    #     # print('====================================================')
+    #     query = "test"
+    #     message = self.request.recv(1024).decode().strip()
+
+    #     match = re.search(r'\?(.*) HTTP', message)
+    #     if match:
+    #         query_params = match.group(1)
+    #         params_dict = dict(re.findall(r'(\w+)=([^&]+)', query_params))
+    #         # print(params_dict)
+    #     # print('====================================================')
+    #     headers = self.read_http_headers() 
+
+
+    #     try:
+    #         assert headers['upgrade'].lower() == 'websocket'
+    #     except AssertionError:
+    #         self.keep_alive = False
+    #         return
+
+    #     try:
+    #         key = headers['sec-websocket-key']
+    #     except KeyError:
+    #         logger.warning("Client tried to connect but was missing a key")
+    #         self.keep_alive = False
+    #         return
+
+    #     response = self.make_handshake_response(key)
+    #     self.query = query
+    #     with self._send_lock:
+    #         self.handshake_done = self.request.send(response.encode())
+    #     self.valid_client = True
+    #     self.server._new_client_(self)
+
     @classmethod
     def make_handshake_response(cls, key):
+        
         return \
           'HTTP/1.1 101 Switching Protocols\r\n'\
           'Upgrade: websocket\r\n'              \
